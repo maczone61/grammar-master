@@ -194,7 +194,7 @@ function validateFullLesson(answer) {
   if (aCount < qCount || aCount < 10) problems.push(`Only ${aCount} numbered answer entries for ${qCount} questions`);
   if (answerBlocks.some(block => block.length < 24)) problems.push('At least one answer-key entry is too short to contain a useful explanation');
   if (answer.length < 900) problems.push('The response is unusually short for a full topic lesson');
-  if (/(?:\b(?:because|which|that|and|or|the|a|an|to|of|with)\s*)\.\.\.$/i.test(answer.trim()) \vert{}\vert{} /\b(?:একট\vert{}কারণ এটি\vert{}এবং এটি)\s*$/.test(answer.trim())) problems.push('The response appears to end mid-sentence');
+  if (/(?:\b(?:because|which|that|and|or|the|a|an|to|of|with)\s*)\.\.\.$/i.test(answer.trim()) || /\b(?:একট|কারণ এটি|এবং এটি)\s*$/.test(answer.trim())) problems.push('The response appears to end mid-sentence');
   return { ok: problems.length === 0, problems, questionCount: qCount, answerCount: aCount };
 }
 
