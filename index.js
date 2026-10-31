@@ -1,10 +1,10 @@
 /**
  * Grammar Master AI — comprehensive teaching engine
  * Requires a Cloudflare Workers AI binding named AI.
- * GET /health, GET /test-ai, POST /teach
+ * GET /health, GET /test-ai, POST /teach (single replies, lesson plans and lesson parts)
  */
 const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
-const VERSION = 'teacher-engine-7';
+const VERSION = 'teacher-engine-8';
 const MAX_QUESTION_CHARS = 6000;
 const MAX_HISTORY_MESSAGES = 6;
 const MAX_HISTORY_CHARS = 7000;
@@ -38,6 +38,7 @@ function cleanText(value, max) {
 function isTopicOnly(question) {
   const s = question.trim();
   if (!s || s.length > 100 || /[?!.;:\n]/.test(s)) return false;
+  if (/^(?:please\s+)?(?:give|show|explain|define|compare|analyse|analyze|correct|check|identify|find|write|make|create|provide|tell|why|how|what|who|when|where|more|another|can|could|would|do|does|is|are)\b/i.test(s)) return false;
   return /^[\p{L}\p{M}][\p{L}\p{M}\s'’()-]*$/u.test(s) &&
     s.split(/\s+/).length <= 7;
 }
@@ -445,6 +446,114 @@ function makeHistory(input) {
   return history;
 }
 
+
+function parseJsonObject(text) {
+  const raw = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  try { return JSON.parse(raw); } catch (_) {}
+  const first = raw.indexOf('{');
+  const last = raw.lastIndexOf('}');
+  if (first >= 0 && last > first) {
+    try { return JSON.parse(raw.slice(first, last + 1)); } catch (_) {}
+  }
+  return null;
+}
+
+function normaliseLessonPlan(value, topic) {
+  if (!value || typeof value !== 'object' || !Array.isArray(value.parts)) return null;
+  const parts = value.parts.slice(0, 10).map((p, i) => ({
+    title: cleanText(p?.title, 140) || `Part ${i + 1}`,
+    purpose: cleanText(p?.purpose, 500),
+    scope: cleanText(p?.scope, 1800),
+    sections: Array.isArray(p?.sections) ? p.sections.map(x => cleanText(x, 180)).filter(Boolean).slice(0, 12) : [],
+    includeExercises: Boolean(p?.includeExercises)
+  })).filter(p => p.scope && p.sections.length);
+  if (!parts.length) return null;
+  const broadTopic = /\b(noun|pronoun|verb|adjective|adverb|preposition|conjunction|article|determiner|tense|aspect|voice|mood|phrase|clause|sentence|punctuation|reported speech|narration|transformation)\b/i.test(topic);
+  if (broadTopic && parts.length < 3) return null;
+  parts[parts.length - 1].includeExercises = true;
+  return {
+    topic: cleanText(value.topic, 180) || topic,
+    frameworkNote: cleanText(value.frameworkNote, 700),
+    parts
+  };
+}
+
+function fallbackLessonPlan(topic) {
+  return {
+    topic,
+    frameworkNote: 'The teacher will identify the recognised classification framework and explain differences between traditional and modern terminology where relevant.',
+    parts: [
+      { title: 'Foundations and complete classification map', purpose: 'Establish the concept and show the full route through the lesson.', scope: 'Introduce the topic, give its definition and explain its purpose. Present a complete, nested map of the recognised classifications, subdivisions and important dimensions. Explain the basis of classification and distinguish overlapping frameworks. Teach the foundational concepts needed for the later parts.', sections: ['Introduction and definition', 'Purpose and basic understanding', 'Complete classification hierarchy and scope'], includeExercises: false },
+      { title: 'Detailed classifications and practical use', purpose: 'Teach the main categories and their internal subdivisions.', scope: 'Teach the recognised main classes and their subclasses in the order shown by the lesson plan. Give every item its own heading, separate definition, detailed explanation and examples chosen according to what clarifies the point. Explain forms, functions, relationships, uses and distinctions.', sections: ['Main classifications', 'Subclasses and further subdivisions', 'Forms, functions and uses'], includeExercises: false },
+      { title: 'Further distinctions, recap and practice', purpose: 'Complete the remaining scope and consolidate understanding.', scope: 'Complete any remaining classifications, subdivisions, rules, exceptions, comparisons and common errors. Correctly distinguish traditional and modern analyses where relevant. End with a comprehensive recap, at least ten suitable exercises, and a matching fully explained answer key.', sections: ['Remaining classifications and special cases', 'Common errors and important distinctions', 'Summary, exercises and explained answers'], includeExercises: true }
+    ]
+  };
+}
+
+async function generateLessonPlan(env, question, settings, history) {
+  const intent = detectLessonIntent(question, settings, history.length > 0);
+  const plannerPrompt = systemPrompt(settings, intent) + `\n\nMULTI-PART LESSON PLANNER — RETURN JSON ONLY\nThe learner has requested a full lesson on the topic: ${question}\nCreate a complete teaching roadmap before any lesson text is generated. Divide a broad topic into manageable sequential parts so each part can be taught thoroughly in one response of about 900–1500 words. Use 2–8 parts as pedagogically appropriate; a genuinely narrow topic may use one part. For broad foundational topics such as Pronoun, Noun, Verb, Tense, Clause or Sentence, normally use at least 3 parts. Do not cram the whole topic into one part.\nThe roadmap must cover the complete recognised hierarchy: main classes, subclasses, sub-subclasses and further meaningful subdivisions, plus important functions, forms, uses, exceptions and distinctions. Allocate every item to exactly one or more clearly identified parts; do not omit any major item. Part 1 must introduce and define the topic and show the complete nested classification hierarchy and scope map, explaining that the later parts will teach its branches. Do not try to teach every branch in Part 1. The final part must complete remaining content and include a summary, at least 10 exercises and a matching answer key with explanations. Prefer a separate final review/practice part when the topic is broad.\nChoose logical teaching order, not equal-sized mechanical divisions. Return exactly this JSON shape and no Markdown fences: {"topic":"...","frameworkNote":"...","parts":[{"title":"...","purpose":"...","scope":"...","sections":["...","..."],"includeExercises":false}]}. Each part must have a specific title, a detailed scope, and 1–8 section names. Set includeExercises true only for the final part. No trailing commas.`;
+  const messages = [
+    { role: 'system', content: plannerPrompt },
+    ...history,
+    { role: 'user', content: `Prepare the complete multi-part teaching plan for: ${question}. Return valid JSON only.` }
+  ];
+  let parsed = null;
+  for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
+    const result = await runModel(env, messages, 2600, 0.18);
+    parsed = normaliseLessonPlan(parseJsonObject(result.answer), question);
+  }
+  return parsed || fallbackLessonPlan(question);
+}
+
+async function generateLessonPart(env, body, settings, history) {
+  const topic = cleanText(body?.topic || body?.question, MAX_QUESTION_CHARS);
+  const plan = normaliseLessonPlan(body?.plan, topic);
+  const index = Number.isInteger(body?.partIndex) ? body.partIndex : -1;
+  if (!topic || !plan || index < 0 || index >= plan.parts.length) {
+    throw new Error('The lesson part request is incomplete. Please restart the lesson.');
+  }
+  const part = plan.parts[index];
+  const total = plan.parts.length;
+  const firstPart = index === 0;
+  const finalPart = index === total - 1;
+  const intent = detectLessonIntent(topic, settings, false);
+  const roadmap = plan.parts.map((p, i) => `${i + 1}. ${p.title}\nScope: ${p.scope}\nSections: ${p.sections.join('; ')}`).join('\n\n');
+  const partSystem = systemPrompt(settings, intent) + `\n\nFRAMEWORK NOTE FROM THE ROADMAP: ${plan.frameworkNote || 'Use recognised grammatical frameworks and identify terminology differences where relevant.'}\n\nMULTI-PART TEACHING OVERRIDE — FOLLOW THIS PART ONLY\nYou are teaching Part ${index + 1} of ${total} of the complete lesson on ${topic}. This is a planned sequence, not a standalone full lesson. Teach the assigned scope deeply and coherently; do not attempt to squeeze the entire topic into this response.\nCOMPLETE ROADMAP (all parts):\n${roadmap}\n\nCURRENT PART: ${index + 1} — ${part.title}\nPurpose: ${part.purpose}\nScope to teach now: ${part.scope}\nRequired sections: ${part.sections.join('; ')}\n\nRules for this part:\n- Begin with a clear heading: **Part ${index + 1} of ${total}: ${part.title}**.\n- Teach every item in this part's scope. Each new classification or concept gets its own bold heading and its own separately marked **Definition:** followed by a clear explanation. Do not combine siblings into one explanation.\n- Choose examples intelligently: a word may be enough for a form/category; a phrase may be needed for a combination; a sentence or connected sentences may be needed to show function, relationships, context or meaning. Explain the example to the depth required. Do not mechanically use only words or only sentences.\n- When a grammatical function needs demonstration, analyse the relevant words and explain their relationship.\n- MULTI-PART OVERRIDE: the earlier single-response rule requiring every mapped item to be taught in the same response is superseded for this task. The complete map shows the whole journey; teach only the items assigned to the current part.\n- Part 1 only: show the complete nested classification hierarchy for the entire topic, but teach in detail only the foundations and items assigned to Part 1. State which branches will be taught in later parts.\n- Later parts: continue from the previous part naturally. Do not repeat the entire hierarchy map or re-teach completed material. Use the conversation history and roadmap to maintain continuity.\n- Do not include the overall exercise set or answer key until the final part. In the final part, include a comprehensive recap, at least 10 numbered exercises and at least 10 matching answers with explanations.\n- End a non-final part with a brief note telling the learner that this part is complete and the next part will be prepared automatically. Do not ask the learner to type anything or press a button.\n- End the final part by clearly saying that the complete lesson is finished.\n- Never claim that the entire topic is complete before the final part. Do not repeat the complete lesson introduction in every part.\n- Use the selected explanation language and preserve English grammar terminology and English examples according to the existing language rules.\n- Be academically accurate, natural, and thorough. Do not pad. Finish all sections assigned to this part.`;
+  const userPrompt = `Teach Part ${index + 1} of ${total} now. Topic: ${topic}. Part title: ${part.title}. Scope: ${part.scope}. Sections: ${part.sections.join('; ')}. ${firstPart ? 'Start the lesson and show the complete classification map.' : 'Continue from the previous part in the conversation.'} ${finalPart ? 'This is the final part: include the overall summary, at least 10 exercises and their fully explained matching answer key.' : 'This is not the final part: do not include the overall exercise set or answer key.'}`;
+  const messages = [
+    { role: 'system', content: partSystem },
+    ...history,
+    { role: 'user', content: userPrompt }
+  ];
+  let answer = '';
+  let lastError = '';
+  for (let attempt = 0; attempt < 2 && !answer; attempt++) {
+    try {
+      const result = await runModel(env, messages, finalPart ? 3800 : 3000, 0.24);
+      answer = result.answer;
+      if (answer && answer.length < 180) answer = '';
+    } catch (error) {
+      lastError = cleanText(error?.message, 240);
+    }
+  }
+  if (!answer) throw new Error('Part ' + (index + 1) + ' could not be generated after two attempts. ' + (lastError || 'The model returned an empty or incomplete response.') );
+  const expectedHeading = `**Part ${index + 1} of ${total}: ${part.title}**`;
+  if (!answer.includes(expectedHeading)) answer = expectedHeading + '\n\n' + answer;
+  return {
+    answer,
+    topic,
+    partIndex: index,
+    partNumber: index + 1,
+    partCount: total,
+    partTitle: part.title,
+    isFinal: finalPart,
+    nextTitle: finalPart ? '' : plan.parts[index + 1].title,
+    model: MODEL,
+    version: VERSION
+  };
+}
+
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin') || '*';
@@ -498,7 +607,29 @@ export default {
 
     const settings = body?.settings && typeof body.settings === 'object' ? body.settings : {};
     const history = makeHistory(body?.history);
+
+    // Multipart lesson actions bypass the old all-in-one full-lesson validator.
+    if (body?.lessonAction === 'plan') {
+      try {
+        const plan = await generateLessonPlan(env, question, settings, history);
+        return json({ lessonPlan: plan, model: MODEL, version: VERSION }, 200, origin);
+      } catch (error) {
+        return json({ error: 'Could not prepare the lesson roadmap: ' + cleanText(error?.message, 300), retryable: true, model: MODEL, version: VERSION }, 502, origin);
+      }
+    }
+    if (body?.lessonAction === 'part') {
+      try {
+        const part = await generateLessonPart(env, body, settings, history);
+        return json(part, 200, origin);
+      } catch (error) {
+        return json({ error: 'Could not create the requested lesson part: ' + cleanText(error?.message, 300), retryable: true, model: MODEL, version: VERSION }, 502, origin);
+      }
+    }
+
     const intent = detectLessonIntent(question, settings, history.length > 0);
+    if (intent.fullLesson && body?.clientSupportsMultipart === true) {
+      return json({ lessonPlanRequired: true, topic: question, version: VERSION }, 200, origin);
+    }
     const messages = [
       { role: 'system', content: systemPrompt(settings, intent) },
       ...history,
