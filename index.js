@@ -4,11 +4,11 @@
  * GET /health, GET /test-ai, POST /teach
  */
 const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
-const VERSION = 'teacher-engine-5';
+const VERSION = 'teacher-engine-6';
 const MAX_QUESTION_CHARS = 6000;
 const MAX_HISTORY_MESSAGES = 6;
 const MAX_HISTORY_CHARS = 7000;
-const MAX_OUTPUT_TOKENS = 6000;
+const MAX_OUTPUT_TOKENS = 7000;
 
 function corsHeaders(origin) {
   return {
@@ -95,6 +95,16 @@ MANDATORY TOPIC AND DEFINITION FORMATTING — NON-NEGOTIABLE
 - Keep headings short, clear, and separate. Do not rely on ordinary paragraph text to communicate the lesson's structure.
 - Apply this formatting consistently to every topic and every classification, not only to Noun. Keep the existing Exercise and Answer key with explanations sections and their numbered structure.
 
+UNIVERSAL CLASSIFICATION HIERARCHY — ABSOLUTE REQUIREMENT
+- Before teaching the classifications of ANY topic, meticulously map the topic's recognised classification hierarchy. Identify every relevant main class, each subclass under its correct parent, and every relevant sub-subclass. Continue to the deepest academically meaningful level; never stop at the first level merely because the list is long.
+- Put this map under the exact Markdown heading ## Classification hierarchy and scope. Present it as a clearly nested bullet tree. After the map, begin the teaching sections under the exact Markdown heading ## Detailed teaching so the map is clearly separated from the lesson body. Each bullet must contain ONLY one classification name in bold, for example: - **Personal Pronouns**; indent subclasses beneath their parent and sub-subclasses beneath their own parent. Do not put several categories on one bullet.
+- Include all important, established classifications appropriate to the requested topic and learner level. Consider traditional school grammar and relevant modern grammatical analysis. Where systems differ, show the alternative framework or label clearly rather than silently omitting it or mixing incompatible systems.
+- Distinguish classification bases (such as form, meaning, function, position, clause role, or use). Do not treat categories based on different criteria as mutually exclusive or as siblings in one hierarchy. Show overlapping classifications in separate branches and explain the overlap.
+- After presenting the map, teach EVERY item in it separately. Each mapped item must have its own standalone bold heading, immediately followed by its own separately marked **Definition:**, then a substantial explanation, examples, explanation of examples, uses, distinctions, and relevant errors. A parent heading does not count as teaching its children. A list or a passing mention does not count as teaching.
+- Never combine two or more classes, subclasses, or sub-subclasses into one shared explanation. Complete one item before moving to the next. If a child has its own recognised subdivisions, map and teach those separately too.
+- Do not invent categories to make a map look complete. If reputable frameworks genuinely provide no fixed classification for a narrow topic, say so explicitly under the map and instead map its recognised dimensions, functions, or rule groups; teach each listed item separately.
+- The map is a teaching checklist, not a decorative outline. Before finishing, compare it against the lesson: every mapped label must appear later as its own bold heading with an immediate bold Definition: and a full discussion. If the response cannot fit all items, clearly label it as Part 1, state exactly which mapped items remain, and do not call it a complete lesson.
+
 HUMAN TEACHER METHODOLOGY — PERMANENT RULES
 Your role is to conduct a real lesson, not to generate a reference sheet. Sound like a warm, serious, academically experienced human teacher speaking directly to one learner. Use natural classroom language such as “Dear learner”, “Let us understand this carefully”, “Now observe these examples”, “Can you see the difference?”, and “Before we move on, remember this point”. Use these expressions naturally, not mechanically in every paragraph.
 
@@ -172,8 +182,8 @@ When the learner names a grammar topic or requests teaching from scratch, produc
 2. Definition and core idea: first explain simply, then state the precise academic definition.
 3. Function and importance.
 4. Form, structure, and identification: how to recognise it in real sentences.
-5. Classification: explain the basis of classification, then cover major categories and relevant subtypes separately. Do not omit important school-level or advanced categories.
-6. Rules and uses: explain each major rule with conditions and examples.
+5. **Classification hierarchy and scope**: under ## Classification hierarchy and scope, first give the complete nested classification map, identifying every relevant class, subclass, and sub-subclass. Then begin ## Detailed teaching and teach every mapped item separately, in the same hierarchy, with its own heading, Definition:, detailed explanation, and examples. No mapped item may be skipped, merged, or merely mentioned.
+6. Rules and uses: explain each major rule with conditions and examples. Where rules themselves have recognised types or subtypes, map and teach them separately.
 7. Exceptions, special cases, and distinctions.
 8. Many clear English examples, each followed by an explanation in ${language}.
 9. Common errors: show incorrect forms, corrected forms, and reasons.
@@ -316,6 +326,68 @@ function validateNounTeaching(answer) {
   return problems;
 }
 
+function stripSpeechMarkers(value) {
+  return String(value || '').replace(/\[\[EN\]\]|\[\[\/EN\]\]/g, '');
+}
+
+function validateClassificationHierarchy(answer) {
+  const lines = stripSpeechMarkers(answer).split(/\r?\n/);
+  const problems = [];
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const plain = lines[i].replace(/^\s{0,3}#{1,6}\s*/, '').replace(/\*\*/g, '').trim();
+    if (/^classification hierarchy and scope$/i.test(plain)) {
+      start = i + 1;
+      break;
+    }
+  }
+  if (start < 0) {
+    return ['Missing the required Classification hierarchy and scope map'];
+  }
+
+  let end = lines.length;
+  for (let i = start; i < lines.length; i++) {
+    if (/^\s{0,3}#{1,6}\s+/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  const mapLines = lines.slice(start, end);
+  const labels = [];
+  for (const line of mapLines) {
+    const match = line.match(/^\s*[-*+]\s+\*\*([^*][^]*?)\*\*\s*$/);
+    if (match) {
+      const label = match[1].trim();
+      if (label && !labels.some(x => x.toLowerCase() === label.toLowerCase())) labels.push(label);
+    }
+  }
+
+  const mapText = mapLines.join('\n');
+  const explicitlyNoFixedTaxonomy = /no (?:universally accepted )?fixed (?:named )?classification|not normally divided into fixed named classes|no established fixed classification/i.test(mapText);
+  if (!labels.length && !explicitlyNoFixedTaxonomy) {
+    problems.push('The classification map contains no individually listed classes, subclasses, or topic dimensions');
+    return problems;
+  }
+
+  const plainAll = lines.join('\n');
+  for (const label of labels) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const heading = new RegExp('^\\s*(?:#{1,6}\\s*)?\\*\\*\\s*' + escaped + '\\s*\\*\\*\\s*$', 'im');
+    const match = heading.exec(plainAll);
+    if (!match) {
+      problems.push(`Mapped classification “${label}” has no separate bold teaching heading`);
+      continue;
+    }
+    const afterHeading = plainAll.slice(match.index + match[0].length);
+    const nextContent = afterHeading.match(/\S[\s\S]*/);
+    const firstLine = nextContent ? nextContent[0].split(/\r?\n/)[0].trim() : '';
+    if (!/^\*\*Definition\s*:?\s*\*\*/i.test(firstLine)) {
+      problems.push(`Mapped classification “${label}” is not followed immediately by its own bold Definition:`);
+    }
+  }
+  return problems;
+}
+
 function validateFullLesson(answer, question = '') {
   const exercise = sectionText(answer, [/^exercise$/i, /^exercises$/i]);
   const key = sectionText(answer, [/^answer key(?: with explanations)?$/i, /^answers?(?: and explanations)?$/i]);
@@ -331,6 +403,7 @@ function validateFullLesson(answer, question = '') {
   if (answer.length < 1200) problems.push('The response is unusually short for a complete topic lesson');
   if (/\b(?:because|which|that|and|or|the|a|an|to|of|with)\s*\.\.\.$/i.test(answer.trim())) problems.push('The response appears to end mid-sentence');
   if (/\[\[EN\]\](?![\s\S]*\[\[\/EN\]\])/.test(answer)) problems.push('An English speech marker appears to be unclosed');
+  problems.push(...validateClassificationHierarchy(answer));
   if (isNounFoundationRequest(question)) problems.push(...validateNounTeaching(answer));
 
   return { ok: problems.length === 0, problems, questionCount: questions.length, answerCount: answers.length };
@@ -438,11 +511,11 @@ export default {
         const repairMessages = [
           {
             role: 'system',
-            content: systemPrompt(settings, intent) + '\n\nYou are now the academic editor of your own draft. Repair every listed defect. Preserve correct material and the existing Exercise and Answer key with explanations wherever they are already complete and correct. Fix inaccurate or incomplete teaching, complete all missing sections, and return the entire corrected lesson. Every topic and classification heading must be on its own line in bold, followed immediately by a separately marked bold Definition: before the detailed explanation. For a foundational Noun lesson, enforce this exact order: Noun definition; Concrete Noun; Abstract Noun; Common Noun; Proper Noun; Collective Noun; Material Noun; only then other noun classifications. Do not omit any of the four Concrete Noun categories. Do not describe the repair process. Do not shorten the lesson merely to save space.'
+            content: systemPrompt(settings, intent) + '\n\nYou are now the academic editor of your own draft. Repair every listed defect. Preserve correct material and the existing Exercise and Answer key with explanations wherever they are already complete and correct. First create a complete nested Classification hierarchy and scope map listing every relevant class, subclass, and sub-subclass separately. Then teach every mapped item under its own standalone bold heading, immediately followed by its own bold Definition:, detailed explanation, examples, and explanation of examples. Never merge, skip, or merely mention any mapped item. Ensure every map entry has a matching teaching heading and definition. Fix inaccurate or incomplete teaching and return the entire corrected lesson. For a foundational Noun lesson, enforce this exact order: Noun definition; Concrete Noun; Abstract Noun; Common Noun; Proper Noun; Collective Noun; Material Noun; only then other noun classifications. Do not omit any of the four Concrete Noun categories. Do not describe the repair process. Do not shorten the lesson merely to save space.'
           },
           {
             role: 'user',
-            content: `The draft failed these structural checks: ${quality.problems.join('; ')}.\n\nDRAFT TO REPAIR:\n${answer}\n\nReturn the complete corrected lesson. It must contain at least 10 numbered Exercise questions and a matching Answer key with explanations. Preserve the existing exercise questions and answers if they are already correct and complete. For a foundational Noun lesson, enforce the required sequence and all seven bold headings with separate bold Definition: labels. Do not return only the missing section.`
+            content: `The draft failed these structural checks: ${quality.problems.join('; ')}.\n\nDRAFT TO REPAIR:\n${answer}\n\nReturn the complete corrected lesson. It must contain a complete nested Classification hierarchy and scope map. Every class, subclass, and sub-subclass in that map must be taught separately under its own bold heading, immediately followed by a separate bold Definition:, detailed explanation, and examples. Do not combine or omit mapped items. It must also contain at least 10 numbered Exercise questions and a matching Answer key with explanations. Preserve existing exercise questions and answers if they are already correct and complete. For a foundational Noun lesson, enforce the required sequence and all seven bold headings with separate bold Definition: labels. Do not return only the missing section.`
           }
         ];
         const second = await runModel(env, repairMessages, MAX_OUTPUT_TOKENS, 0.18);
