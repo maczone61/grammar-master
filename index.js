@@ -4,7 +4,7 @@
  * GET /health, GET /test-ai, POST /teach
  */
 const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
-const VERSION = 'teacher-engine-4';
+const VERSION = 'teacher-engine-5';
 const MAX_QUESTION_CHARS = 6000;
 const MAX_HISTORY_MESSAGES = 6;
 const MAX_HISTORY_CHARS = 7000;
@@ -87,6 +87,14 @@ function systemPrompt(settings, intent) {
 
 
   const humanTeacherMethodology = `
+MANDATORY TOPIC AND DEFINITION FORMATTING — NON-NEGOTIABLE
+- Every major topic heading, classification heading, subtopic heading, and important grammatical label must be visually distinct and written in Markdown bold, for example **Noun**, **Concrete Noun**, **Common Noun**, and **Definition:**.
+- For each new concept, put its bold heading on a separate line. Immediately below it, give a separately marked **Definition:** before beginning the detailed explanation.
+- The definition must come first; the detailed explanation and examples must follow it. Do not hide a definition inside an introductory paragraph.
+- After the definition, explain its meaning in connected classroom-style paragraphs. Give several examples and explain why each example fits.
+- Keep headings short, clear, and separate. Do not rely on ordinary paragraph text to communicate the lesson's structure.
+- Apply this formatting consistently to every topic and every classification, not only to Noun. Keep the existing Exercise and Answer key with explanations sections and their numbered structure.
+
 HUMAN TEACHER METHODOLOGY — PERMANENT RULES
 Your role is to conduct a real lesson, not to generate a reference sheet. Sound like a warm, serious, academically experienced human teacher speaking directly to one learner. Use natural classroom language such as “Dear learner”, “Let us understand this carefully”, “Now observe these examples”, “Can you see the difference?”, and “Before we move on, remember this point”. Use these expressions naturally, not mechanically in every paragraph.
 
@@ -176,7 +184,14 @@ When the learner names a grammar topic or requests teaching from scratch, produc
 
 TOPIC-SPECIFIC COMPLETENESS
 - Do not treat a short list of categories as exhaustive when the topic has more important classifications.
-- For Noun, teach from familiar naming examples first: people (Karim, John, Abdullah), animals (lion, cow, bird), places, things (book, pen), substances (water), and qualities/ideas (honesty, beauty, intelligence). Ask what all these naming words are called, then introduce Noun as a naming word and refine it as a word class that names or refers to people, places, animals, things, substances, events, qualities, states, feelings, ideas, and concepts. In a traditional school-grammar pathway, one useful broad semantic division is Concrete Noun and Abstract Noun. Explain physical existence carefully (perceptible by one or more senses, not only visible or touchable), then explain Abstract Noun through qualities, states, conditions, feelings, and ideas. Next classify Concrete Nouns in the traditional school framework as Proper, Common, Collective, and Material Nouns, while clearly explaining that this is a school-grammar teaching framework rather than the only linguistic taxonomy. Explain the classification basis and overlap: “team” can be common, concrete, countable, and collective; “water” can be common, concrete, and material/mass; “Karim” is proper and concrete; “honesty” is abstract. Then cover countable/uncountable, compound nouns, number, gender where relevant, case/possessive form, noun formation, and grammatical functions such as subject, direct/indirect object, complement, appositive, and object of a preposition. Never claim that every noun classification is one mutually exclusive kind list.
+- For a full foundational lesson requested simply as Noun or Nouns, follow this exact classroom sequence and do not rearrange it:
+  A. Begin with a warm spoken introduction, such as “Dear learners, today we are going to learn about Noun. So, what is a noun?”
+  B. Put **Noun** on its own bold heading. Immediately give **Definition:** and a concise definition first. Then explain it in detail using familiar names and examples: Karim, Abdullah, John, lion, cow, bird, water, air, beauty, merit, intelligence, and honesty. Explain that nouns name or refer to people, animals, places, things, substances, events, qualities, states, feelings, ideas, and concepts. Do not claim literally everything around us is a noun.
+  C. Introduce the two broad traditional school-grammar semantic classes in this order: **Concrete Noun**, then **Abstract Noun**. For EACH class, put its bold heading on a separate line, give a separate **Definition:** immediately below, then explain the definition and examples in detail. Explain that concrete things are experienced through one or more senses; they need not all be visible or touchable. Explain abstract nouns through qualities, states, conditions, feelings, and ideas.
+  D. After both broad classes have been taught, transition explicitly: “Now let us learn more about Concrete Nouns. In the traditional school-grammar classification used here, they are commonly taught under four headings.” Then teach these four categories in EXACTLY this order: **Common Noun**, **Proper Noun**, **Collective Noun**, **Material Noun**. For EACH category, put its bold heading on a separate line, give **Definition:** first, then a detailed explanation, multiple examples, and an explanation of each example. Do not omit Collective Noun or Material Noun. Do not jump to Countable/Uncountable before all four have been taught.
+  E. Only AFTER the four categories above, teach further noun classifications and features: Countable and Uncountable Nouns, compound nouns, number and plural formation, gender where relevant, possessive forms/case, noun formation, and grammatical functions such as subject, direct/indirect object, complement, appositive, and object of a preposition.
+  F. Explain overlap accurately: “team” can be common, concrete, countable, and collective; “water” can be common, concrete, and a material/mass noun; “Karim” is proper and concrete; “honesty” is abstract. Explain that these labels use different classification criteria and are not mutually exclusive.
+  G. Use connected teacher discourse and transitions throughout. Do not compress the lesson into a brief overview or a list of labels. Every heading and definition must be visibly distinct and bold.
 - For Pronoun, cover personal, possessive, reflexive, reciprocal, demonstrative, interrogative, relative, indefinite, and distributive forms where relevant; explain person, number, case, agreement, antecedents, and the modern distinction between possessive determiners and possessive pronouns.
 - For Verb, cover lexical/main and auxiliary verbs, primary and modal auxiliaries, finite and non-finite forms, transitive and intransitive uses, linking verbs, regular and irregular forms, tense/aspect, voice, mood, verb patterns, and subject-verb agreement where relevant.
 - For Adjective and Adverb, explain function, position, types/semantic classes, comparison, modification, order where relevant, and common confusions.
@@ -260,7 +275,48 @@ function numberedBlocks(text) {
   return blocks;
 }
 
-function validateFullLesson(answer) {
+function isNounFoundationRequest(question) {
+  const q = String(question || '').toLowerCase().trim();
+  return /^(?:please\s+)?(?:teach(?:\s+me)?\s+)?(?:the\s+)?nouns?\s*(?:lesson|lecture)?[.!?]*$/.test(q) ||
+    /^(?:full\s+)?(?:lesson|lecture)\s+(?:on|about)\s+(?:the\s+)?nouns?[.!?]*$/.test(q);
+}
+
+function validateNounTeaching(answer) {
+  const plain = String(answer || '').replace(/\[\[EN\]\]|\[\[\/EN\]\]/g, '');
+  const problems = [];
+  const required = [
+    ['Noun', /(?:^|\r?\n)\s*(?:#{1,6}\s*)?\*\*\s*Noun\s*\*\*\s*(?:\r?\n|$)/im],
+    ['Concrete Noun', /(?:^|\r?\n)\s*(?:#{1,6}\s*)?\*\*\s*Concrete Noun\s*\*\*\s*(?:\r?\n|$)/im],
+    ['Abstract Noun', /(?:^|\r?\n)\s*(?:#{1,6}\s*)?\*\*\s*Abstract Noun\s*\*\*\s*(?:\r?\n|$)/im],
+    ['Common Noun', /(?:^|\r?\n)\s*(?:#{1,6}\s*)?\*\*\s*Common Noun\s*\*\*\s*(?:\r?\n|$)/im],
+    ['Proper Noun', /(?:^|\r?\n)\s*(?:#{1,6}\s*)?\*\*\s*Proper Noun\s*\*\*\s*(?:\r?\n|$)/im],
+    ['Collective Noun', /(?:^|\r?\n)\s*(?:#{1,6}\s*)?\*\*\s*Collective Noun\s*\*\*\s*(?:\r?\n|$)/im],
+    ['Material Noun', /(?:^|\r?\n)\s*(?:#{1,6}\s*)?\*\*\s*Material Noun\s*\*\*\s*(?:\r?\n|$)/im]
+  ];
+  const positions = [];
+  for (const [label, pattern] of required) {
+    const match = pattern.exec(plain);
+    if (!match) problems.push(`Missing separate bold heading: ${label}`);
+    else positions.push({ label, index: match.index, end: match.index + match[0].length });
+  }
+  if (positions.length === required.length) {
+    for (let i = 1; i < positions.length; i++) {
+      if (positions[i].index <= positions[i - 1].index) {
+        problems.push('Noun classifications are not presented in the required order: Noun, Concrete, Abstract, Common, Proper, Collective, Material');
+        break;
+      }
+    }
+  }
+  for (const item of positions) {
+    const following = plain.slice(item.end, Math.min(item.end + 260, plain.length));
+    if (!/^\s*\*\*\s*Definition\s*:?\s*\*\*/i.test(following)) {
+      problems.push(`The ${item.label} heading must be followed immediately by a separately marked bold Definition:`);
+    }
+  }
+  return problems;
+}
+
+function validateFullLesson(answer, question = '') {
   const exercise = sectionText(answer, [/^exercise$/i, /^exercises$/i]);
   const key = sectionText(answer, [/^answer key(?: with explanations)?$/i, /^answers?(?: and explanations)?$/i]);
   const problems = [];
@@ -275,6 +331,7 @@ function validateFullLesson(answer) {
   if (answer.length < 1200) problems.push('The response is unusually short for a complete topic lesson');
   if (/\b(?:because|which|that|and|or|the|a|an|to|of|with)\s*\.\.\.$/i.test(answer.trim())) problems.push('The response appears to end mid-sentence');
   if (/\[\[EN\]\](?![\s\S]*\[\[\/EN\]\])/.test(answer)) problems.push('An English speech marker appears to be unclosed');
+  if (isNounFoundationRequest(question)) problems.push(...validateNounTeaching(answer));
 
   return { ok: problems.length === 0, problems, questionCount: questions.length, answerCount: answers.length };
 }
@@ -373,7 +430,7 @@ export default {
       if (!answer) return json({ error: 'The teacher returned an empty response. Please try again.' }, 502, origin);
 
       let quality = intent.fullLesson
-        ? validateFullLesson(answer)
+        ? validateFullLesson(answer, question)
         : { ok: true, problems: [], questionCount: 0, answerCount: 0 };
       let repaired = false;
 
@@ -381,16 +438,16 @@ export default {
         const repairMessages = [
           {
             role: 'system',
-            content: systemPrompt(settings, intent) + '\n\nYou are now the academic editor of your own draft. Repair every listed defect. Preserve correct material, fix inaccurate or incomplete teaching, complete all missing sections, and return the entire corrected lesson. Do not describe the repair process. Do not shorten the lesson merely to save space.'
+            content: systemPrompt(settings, intent) + '\n\nYou are now the academic editor of your own draft. Repair every listed defect. Preserve correct material and the existing Exercise and Answer key with explanations wherever they are already complete and correct. Fix inaccurate or incomplete teaching, complete all missing sections, and return the entire corrected lesson. Every topic and classification heading must be on its own line in bold, followed immediately by a separately marked bold Definition: before the detailed explanation. For a foundational Noun lesson, enforce this exact order: Noun definition; Concrete Noun; Abstract Noun; Common Noun; Proper Noun; Collective Noun; Material Noun; only then other noun classifications. Do not omit any of the four Concrete Noun categories. Do not describe the repair process. Do not shorten the lesson merely to save space.'
           },
           {
             role: 'user',
-            content: `The draft failed these structural checks: ${quality.problems.join('; ')}.\n\nDRAFT TO REPAIR:\n${answer}\n\nReturn the complete corrected lesson. It must contain at least 10 numbered Exercise questions and a matching Answer key with explanations. Do not return only the missing section.`
+            content: `The draft failed these structural checks: ${quality.problems.join('; ')}.\n\nDRAFT TO REPAIR:\n${answer}\n\nReturn the complete corrected lesson. It must contain at least 10 numbered Exercise questions and a matching Answer key with explanations. Preserve the existing exercise questions and answers if they are already correct and complete. For a foundational Noun lesson, enforce the required sequence and all seven bold headings with separate bold Definition: labels. Do not return only the missing section.`
           }
         ];
         const second = await runModel(env, repairMessages, MAX_OUTPUT_TOKENS, 0.18);
         if (second.answer) {
-          const secondQuality = validateFullLesson(second.answer);
+          const secondQuality = validateFullLesson(second.answer, question);
           if (secondQuality.ok || (second.answer.length > answer.length * 1.15 && secondQuality.problems.length < quality.problems.length)) {
             answer = second.answer;
             quality = secondQuality;
